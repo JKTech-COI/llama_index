@@ -187,8 +187,9 @@ class KnowledgeGraphIndex(BaseIndex[KG]):
                 continue
 
             # Strip double quotes and Capitalize triplets for disambiguation
+            # Rana: Additionally strip off spaces, single quotes and brackets ()
             subj, pred, obj = (
-                entity.strip('"').capitalize() for entity in [subj, pred, obj]
+                entity.strip(' ("\')').capitalize() for entity in [subj, pred, obj]
             )
 
             results.append((subj, pred, obj))
