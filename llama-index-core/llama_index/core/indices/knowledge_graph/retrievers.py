@@ -173,6 +173,11 @@ class KGTableRetriever(BaseRetriever):
             keyword = rel_text.split(",")[0]
             if keyword:
                 keywords.append(keyword.strip("(\"'"))
+            ### Rana: Need to add the Object as well
+            keyword = rel_text.split(",")[2]
+            if keyword:
+                keywords.append(keyword.strip(" ()\"'"))
+                
         return keywords
 
     def _retrieve(
