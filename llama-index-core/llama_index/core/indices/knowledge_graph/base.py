@@ -191,6 +191,8 @@ class KnowledgeGraphIndex(BaseIndex[KG]):
             subj, pred, obj = (
                 entity.strip(' ("\')').capitalize() for entity in [subj, pred, obj]
             )
+            #Rana: remove spaces and make the predicate upper case
+            pred = pred.upper().replace(' ','_')
 
             results.append((subj, pred, obj))
         return results
