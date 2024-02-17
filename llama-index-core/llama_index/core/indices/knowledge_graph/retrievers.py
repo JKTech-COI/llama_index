@@ -180,10 +180,7 @@ class KGTableRetriever(BaseRetriever):
                 
         return keywords
 
-    def _retrieve(
-        self,
-        query_bundle: QueryBundle,
-    ) -> List[NodeWithScore]:
+    def _retrieve(self, query_bundle: QueryBundle,) -> List[NodeWithScore]:
         """Get nodes for response."""
         node_visited = set()
         keywords = self._get_keywords(query_bundle.query_str)
@@ -257,7 +254,8 @@ class KGTableRetriever(BaseRetriever):
             logger.debug(
                 f"Found the following rel_texts+query similarites: {similarities!s}"
             )
-            logger.debug(f"Found the following top_k rel_texts: {rel_texts!s}")
+            # Rana : fix logger should display top_rel_texts instead of rel_texts
+            logger.debug(f"Found the following top_k rel_texts: {top_rel_texts!s}")
             rel_texts.extend(top_rel_texts)
 
         elif len(self._index_struct.embedding_dict) == 0:
@@ -314,7 +312,9 @@ class KGTableRetriever(BaseRetriever):
         for chunk_idx, node in zip(sorted_chunk_indices, sorted_nodes):
             # nodes are found with keyword mapping, give high conf to avoid cutoff
             sorted_nodes_with_scores.append(
-                NodeWithScore(node=node, score=DEFAULT_NODE_SCORE)
+                # NodeWithScore(node=node, score=DEFAULT_NODE_SCORE)
+                # Rana: Returning the number of times the chunk has been inferenced as a better parameter for score
+                NodeWithScore(node=node, score=chunk_indices_count[chunk_idx])
             )
             logger.info(
                 f"> Querying with idx: {chunk_idx}: "
@@ -381,6 +381,126 @@ class KGTableRetriever(BaseRetriever):
                 continue
             return node.metadata
         raise ValueError("kg_rel_map must be found in at least one Node.")
+
+
+
+
+    def retrieve_similar_rels(self, query_str: str,) -> List[NodeWithScore]:
+        """Get nodes for response."""
+        rel_texts = []
+        keywords = self._get_keywords(query_str)
+        if self._verbose:
+            print_text(f"Extracted keywords: {keywords}\n", color="green")
+        if (
+            self._retriever_mode != KGRetrieverMode.KEYWORD
+            and len(self._index_struct.embedding_dict) > 0
+        ):
+            query_embedding = self._embed_model.get_text_embedding(
+                query_str
+            )
+            all_rel_texts = list(self._index_struct.embedding_dict.keys())
+
+            rel_text_embeddings = [
+                self._index_struct.embedding_dict[_id] for _id in all_rel_texts
+            ]
+            similarities, top_rel_texts = get_top_k_embeddings(
+                query_embedding,
+                rel_text_embeddings,
+                similarity_top_k=self.similarity_top_k,
+                embedding_ids=all_rel_texts,
+            )
+            rel_texts.extend(top_rel_texts)
+        return similarities, top_rel_texts
+    
+    def retrieve_filtered(self, rel_texts: List) -> List[NodeWithScore]:
+        node_visited = set()
+        cur_rel_map = {}
+        chunk_indices_count: Dict[str, int] = defaultdict(int)
+        # When include_text = True just get the actual content of all the nodes
+        # (Nodes with actual keyword match, Nodes which are found from the depth search and Nodes founnd from top_k similarity)
+        if self._include_text:
+            keywords = self._extract_rel_text_keywords(
+                rel_texts
+            )  # rel_texts will have all the Triplets retrieved with respect to the Query
+            nested_node_ids = [
+                self._index_struct.search_node_by_keyword(keyword)
+                for keyword in keywords
+            ]
+            node_ids = [_id for ids in nested_node_ids for _id in ids]
+            for node_id in node_ids:
+                chunk_indices_count[node_id] += 1
+
+        sorted_chunk_indices = sorted(
+            chunk_indices_count.keys(),
+            key=lambda x: chunk_indices_count[x],
+            reverse=True,
+        )
+        sorted_chunk_indices = sorted_chunk_indices[: self.num_chunks_per_query]
+        sorted_nodes = self._docstore.get_nodes(sorted_chunk_indices)
+
+        sorted_nodes_with_scores = []
+        for chunk_idx, node in zip(sorted_chunk_indices, sorted_nodes):
+            # nodes are found with keyword mapping, give high conf to avoid cutoff
+            sorted_nodes_with_scores.append(
+                # NodeWithScore(node=node, score=DEFAULT_NODE_SCORE)
+                # Rana: Returning the number of times the chunk has been inferenced as a better parameter for score
+                NodeWithScore(node=node, score=chunk_indices_count[chunk_idx])
+            )
+            logger.info(
+                f"> Querying with idx: {chunk_idx}: "
+                f"{truncate_text(node.get_content(), 80)}"
+            )
+        # if no relationship is found, return the nodes found by keywords
+        if not rel_texts:
+            logger.info("> No relationships found, returning nodes found by keywords.")
+            if len(sorted_nodes_with_scores) == 0:
+                logger.info("> No nodes found by keywords, returning empty response.")
+                return [
+                    NodeWithScore(
+                        node=TextNode(text="No relationships found."), score=1.0
+                    )
+                ]
+            # In else case the sorted_nodes_with_scores is not empty
+            # thus returning the nodes found by keywords
+            return sorted_nodes_with_scores
+
+        # add relationships as Node
+        # TODO: make initial text customizable
+        rel_initial_text = (
+            f"The following are knowledge sequence in max depth"
+            f" {self.graph_store_query_depth} "
+            f"in the form of directed graph like:\n"
+            f"`subject -[predicate]->, object, <-[predicate_next_hop]-,"
+            f" object_next_hop ...`"
+        )
+        rel_info = [rel_initial_text, *rel_texts]
+        rel_node_info = {
+            "kg_rel_texts": rel_texts,
+            "kg_rel_map": cur_rel_map,
+        }
+        if self._graph_schema != "":
+            rel_node_info["kg_schema"] = {"schema": self._graph_schema}
+        rel_info_text = "\n".join(
+            [
+                str(item)
+                for sublist in rel_info
+                for item in (sublist if isinstance(sublist, list) else [sublist])
+            ]
+        )
+        if self._verbose:
+            print_text(f"KG context:\n{rel_info_text}\n", color="blue")
+        rel_text_node = TextNode(
+            text=rel_info_text,
+            metadata=rel_node_info,
+            excluded_embed_metadata_keys=["kg_rel_map", "kg_rel_texts"],
+            excluded_llm_metadata_keys=["kg_rel_map", "kg_rel_texts"],
+        )
+        # this node is constructed from rel_texts, give high confidence to avoid cutoff
+        sorted_nodes_with_scores.append(
+            NodeWithScore(node=rel_text_node, score=DEFAULT_NODE_SCORE)
+        )
+
+        return sorted_nodes_with_scores
 
 
 DEFAULT_SYNONYM_EXPAND_TEMPLATE = """
@@ -854,3 +974,4 @@ class KnowledgeGraphRAGRetriever(BaseRetriever):
         nodes.extend(await self._aretrieve_embedding(query_bundle))
 
         return nodes
+    
