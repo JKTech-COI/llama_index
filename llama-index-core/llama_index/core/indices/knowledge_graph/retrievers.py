@@ -382,15 +382,9 @@ class KGTableRetriever(BaseRetriever):
             return node.metadata
         raise ValueError("kg_rel_map must be found in at least one Node.")
 
-
-
-
     def retrieve_similar_rels(self, query_str: str,) -> List[NodeWithScore]:
-        """Get nodes for response."""
-        rel_texts = []
+        """Retrieve nodes with similar embeddings."""
         keywords = self._get_keywords(query_str)
-        if self._verbose:
-            print_text(f"Extracted keywords: {keywords}\n", color="green")
         if (
             self._retriever_mode != KGRetrieverMode.KEYWORD
             and len(self._index_struct.embedding_dict) > 0
@@ -409,98 +403,115 @@ class KGTableRetriever(BaseRetriever):
                 similarity_top_k=self.similarity_top_k,
                 embedding_ids=all_rel_texts,
             )
-            rel_texts.extend(top_rel_texts)
+
         return similarities, top_rel_texts
     
-    def retrieve_filtered(self, rel_texts: List) -> List[NodeWithScore]:
-        node_visited = set()
-        cur_rel_map = {}
-        chunk_indices_count: Dict[str, int] = defaultdict(int)
-        # When include_text = True just get the actual content of all the nodes
-        # (Nodes with actual keyword match, Nodes which are found from the depth search and Nodes founnd from top_k similarity)
-        if self._include_text:
-            keywords = self._extract_rel_text_keywords(
-                rel_texts
-            )  # rel_texts will have all the Triplets retrieved with respect to the Query
-            nested_node_ids = [
-                self._index_struct.search_node_by_keyword(keyword)
-                for keyword in keywords
-            ]
-            node_ids = [_id for ids in nested_node_ids for _id in ids]
-            for node_id in node_ids:
-                chunk_indices_count[node_id] += 1
+    def retrieve_kw_match_nodes(self, query_str: str,kw_weightage: int) -> List[NodeWithScore]:
+        """Get nodes with same keywords"""
+        node_text_sim = {}
+        keywords = self._get_keywords(query_str)
+        keywords.append(query_str)
+        for keyword in keywords:
+            for key in self._index_struct.table:
+                if keyword.upper() in key.upper().replace('_',' '):
+                    # (len(keyword)/len(key)) # If all letters match then it's 1, else less than 1
+                    if key in node_text_sim:
+                        node_text_sim[key] = max(node_text_sim[key], len(keyword)/len(key))
+                    else:
+                        node_text_sim[key] = len(keyword)/len(key)*kw_weightage
+                        
+        return list(node_text_sim.values()), list(node_text_sim.keys())
 
-        sorted_chunk_indices = sorted(
-            chunk_indices_count.keys(),
-            key=lambda x: chunk_indices_count[x],
-            reverse=True,
-        )
-        sorted_chunk_indices = sorted_chunk_indices[: self.num_chunks_per_query]
-        sorted_nodes = self._docstore.get_nodes(sorted_chunk_indices)
+    
+    # def retrieve_filtered(self, rel_texts: List) -> List[NodeWithScore]:
+    #     node_visited = set()
+    #     cur_rel_map = {}
+    #     chunk_indices_count: Dict[str, int] = defaultdict(int)
+    #     # When include_text = True just get the actual content of all the nodes
+    #     # (Nodes with actual keyword match, Nodes which are found from the depth search and Nodes founnd from top_k similarity)
+    #     if self._include_text:
+    #         keywords = self._extract_rel_text_keywords(
+    #             rel_texts
+    #         )  # rel_texts will have all the Triplets retrieved with respect to the Query
+    #         nested_node_ids = [
+    #             self._index_struct.search_node_by_keyword(keyword)
+    #             for keyword in keywords
+    #         ]
+    #         node_ids = [_id for ids in nested_node_ids for _id in ids]
+    #         for node_id in node_ids:
+    #             chunk_indices_count[node_id] += 1
 
-        sorted_nodes_with_scores = []
-        for chunk_idx, node in zip(sorted_chunk_indices, sorted_nodes):
-            # nodes are found with keyword mapping, give high conf to avoid cutoff
-            sorted_nodes_with_scores.append(
-                # NodeWithScore(node=node, score=DEFAULT_NODE_SCORE)
-                # Rana: Returning the number of times the chunk has been inferenced as a better parameter for score
-                NodeWithScore(node=node, score=chunk_indices_count[chunk_idx])
-            )
-            logger.info(
-                f"> Querying with idx: {chunk_idx}: "
-                f"{truncate_text(node.get_content(), 80)}"
-            )
-        # if no relationship is found, return the nodes found by keywords
-        if not rel_texts:
-            logger.info("> No relationships found, returning nodes found by keywords.")
-            if len(sorted_nodes_with_scores) == 0:
-                logger.info("> No nodes found by keywords, returning empty response.")
-                return [
-                    NodeWithScore(
-                        node=TextNode(text="No relationships found."), score=1.0
-                    )
-                ]
-            # In else case the sorted_nodes_with_scores is not empty
-            # thus returning the nodes found by keywords
-            return sorted_nodes_with_scores
+    #     sorted_chunk_indices = sorted(
+    #         chunk_indices_count.keys(),
+    #         key=lambda x: chunk_indices_count[x],
+    #         reverse=True,
+    #     )
+    #     sorted_chunk_indices = sorted_chunk_indices[: self.num_chunks_per_query]
+    #     sorted_nodes = self._docstore.get_nodes(sorted_chunk_indices)
 
-        # add relationships as Node
-        # TODO: make initial text customizable
-        rel_initial_text = (
-            f"The following are knowledge sequence in max depth"
-            f" {self.graph_store_query_depth} "
-            f"in the form of directed graph like:\n"
-            f"`subject -[predicate]->, object, <-[predicate_next_hop]-,"
-            f" object_next_hop ...`"
-        )
-        rel_info = [rel_initial_text, *rel_texts]
-        rel_node_info = {
-            "kg_rel_texts": rel_texts,
-            "kg_rel_map": cur_rel_map,
-        }
-        if self._graph_schema != "":
-            rel_node_info["kg_schema"] = {"schema": self._graph_schema}
-        rel_info_text = "\n".join(
-            [
-                str(item)
-                for sublist in rel_info
-                for item in (sublist if isinstance(sublist, list) else [sublist])
-            ]
-        )
-        if self._verbose:
-            print_text(f"KG context:\n{rel_info_text}\n", color="blue")
-        rel_text_node = TextNode(
-            text=rel_info_text,
-            metadata=rel_node_info,
-            excluded_embed_metadata_keys=["kg_rel_map", "kg_rel_texts"],
-            excluded_llm_metadata_keys=["kg_rel_map", "kg_rel_texts"],
-        )
-        # this node is constructed from rel_texts, give high confidence to avoid cutoff
-        sorted_nodes_with_scores.append(
-            NodeWithScore(node=rel_text_node, score=DEFAULT_NODE_SCORE)
-        )
+    #     sorted_nodes_with_scores = []
+    #     for chunk_idx, node in zip(sorted_chunk_indices, sorted_nodes):
+    #         # nodes are found with keyword mapping, give high conf to avoid cutoff
+    #         sorted_nodes_with_scores.append(
+    #             # NodeWithScore(node=node, score=DEFAULT_NODE_SCORE)
+    #             # Rana: Returning the number of times the chunk has been inferenced as a better parameter for score
+    #             NodeWithScore(node=node, score=chunk_indices_count[chunk_idx])
+    #         )
+    #         logger.info(
+    #             f"> Querying with idx: {chunk_idx}: "
+    #             f"{truncate_text(node.get_content(), 80)}"
+    #         )
+    #     # if no relationship is found, return the nodes found by keywords
+    #     if not rel_texts:
+    #         logger.info("> No relationships found, returning nodes found by keywords.")
+    #         if len(sorted_nodes_with_scores) == 0:
+    #             logger.info("> No nodes found by keywords, returning empty response.")
+    #             return [
+    #                 NodeWithScore(
+    #                     node=TextNode(text="No relationships found."), score=1.0
+    #                 )
+    #             ]
+    #         # In else case the sorted_nodes_with_scores is not empty
+    #         # thus returning the nodes found by keywords
+    #         return sorted_nodes_with_scores
 
-        return sorted_nodes_with_scores
+    #     # add relationships as Node
+    #     # TODO: make initial text customizable
+    #     rel_initial_text = (
+    #         f"The following are knowledge sequence in max depth"
+    #         f" {self.graph_store_query_depth} "
+    #         f"in the form of directed graph like:\n"
+    #         f"`subject -[predicate]->, object, <-[predicate_next_hop]-,"
+    #         f" object_next_hop ...`"
+    #     )
+    #     rel_info = [rel_initial_text, *rel_texts]
+    #     rel_node_info = {
+    #         "kg_rel_texts": rel_texts,
+    #         "kg_rel_map": cur_rel_map,
+    #     }
+    #     if self._graph_schema != "":
+    #         rel_node_info["kg_schema"] = {"schema": self._graph_schema}
+    #     rel_info_text = "\n".join(
+    #         [
+    #             str(item)
+    #             for sublist in rel_info
+    #             for item in (sublist if isinstance(sublist, list) else [sublist])
+    #         ]
+    #     )
+    #     if self._verbose:
+    #         print_text(f"KG context:\n{rel_info_text}\n", color="blue")
+    #     rel_text_node = TextNode(
+    #         text=rel_info_text,
+    #         metadata=rel_node_info,
+    #         excluded_embed_metadata_keys=["kg_rel_map", "kg_rel_texts"],
+    #         excluded_llm_metadata_keys=["kg_rel_map", "kg_rel_texts"],
+    #     )
+    #     # this node is constructed from rel_texts, give high confidence to avoid cutoff
+    #     sorted_nodes_with_scores.append(
+    #         NodeWithScore(node=rel_text_node, score=DEFAULT_NODE_SCORE)
+    #     )
+
+    #     return sorted_nodes_with_scores
 
 
 DEFAULT_SYNONYM_EXPAND_TEMPLATE = """
