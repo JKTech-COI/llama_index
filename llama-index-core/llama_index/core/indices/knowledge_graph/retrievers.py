@@ -257,6 +257,10 @@ class KGTableRetriever(BaseRetriever):
             # Rana : fix logger should display top_rel_texts instead of rel_texts
             logger.debug(f"Found the following top_k rel_texts: {top_rel_texts!s}")
             rel_texts.extend(top_rel_texts)
+            # Rana: Print nodes and similarities:
+            print("<<<<<<<<<<<<<<<<< Nodes and Similarity Scores >>>>>>>>>>>>>>>>>>")
+            for n, s in zip(top_rel_texts, similarities):
+                print(n,":",s)
 
         elif len(self._index_struct.embedding_dict) == 0:
             logger.warning(
