@@ -29,7 +29,9 @@ class ActionReasoningStep(BaseReasoningStep):
     def get_content(self) -> str:
         """Get content."""
         return (
-            f"Thought: {self.thought}\nAction: {self.action}\n"
+            #Rana: Changing return to JIVA-EKE
+            # f"Thought: {self.thought}\nAction: {self.action}\n"
+            f"JIVA-EKE Analysis: {self.thought}\nJIVA-EKE Action: {self.action}\n"
             f"Action Input: {self.action_input}"
         )
 
@@ -46,7 +48,9 @@ class ObservationReasoningStep(BaseReasoningStep):
 
     def get_content(self) -> str:
         """Get content."""
-        return f"Observation: {self.observation}"
+        #Rana: Changing return to JIVA-EKE
+        # return f"Observation: {self.observation}"
+        return f"JIVA-EKE Findings: {self.observation}"
 
     @property
     def is_done(self) -> bool:
@@ -65,11 +69,16 @@ class ResponseReasoningStep(BaseReasoningStep):
         """Get content."""
         if self.is_streaming:
             return (
-                f"Thought: {self.thought}\n"
-                f"Answer (Starts With): {self.response} ..."
+                #Rana: Changing return to JIVA-EKE
+                # f"Thought: {self.thought}\n"
+                f"JIVA-EKE Analysis: {self.thought}\n"
+                # f"Answer (Starts With): {self.response} ..."
+                f"JIVA-EKE Answer (Starts With): {self.response} ..."
             )
         else:
-            return f"Thought: {self.thought}\n" f"Answer: {self.response}"
+            #Rana: Changing return to JIVA-EKE
+            # return f"Thought: {self.thought}\n" f"Answer: {self.response}"
+            return f"JIVA-EKE Analysis: {self.thought}\n" f"JIVA-EKE Answer: {self.response}"
 
     @property
     def is_done(self) -> bool:
