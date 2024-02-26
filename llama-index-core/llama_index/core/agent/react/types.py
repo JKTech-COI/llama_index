@@ -31,8 +31,8 @@ class ActionReasoningStep(BaseReasoningStep):
         return (
             #Rana: Changing return to JIVA-EKE
             # f"Thought: {self.thought}\nAction: {self.action}\n"
-            f"JIVA-EKE Analysis: {self.thought}\nJIVA-EKE Action: {self.action}\n"
-            f"Action Input: {self.action_input}"
+            f"JIVA-EKE Analysis: {self.thought}\n JIVA-EKE Action: {self.action}\n"
+            f"JIVA-EKE Action Input: {self.action_input}"
         )
 
     @property
