@@ -373,7 +373,15 @@ class KGTableRetriever(BaseRetriever):
         sorted_nodes_with_scores.append(
             NodeWithScore(node=rel_text_node, score=DEFAULT_NODE_SCORE)
         )
-
+        try:
+            uniq_entities = set()
+            triplets = [s.split(',')for s in sorted_nodes_with_scores[-1].metadata['kg_rel_texts']]
+            for triplet in triplets:
+                uniq_entities.add(triplet[0].strip(" \"'{}()"))
+                uniq_entities.add(triplet[2].strip(" \"'{}()"))
+            print(f'Unstruct Nodes to Highlight:, {",".join(list(uniq_entities))}')
+        except Exception as e:
+            print(e)
         return sorted_nodes_with_scores
 
     def _get_metadata_for_response(
